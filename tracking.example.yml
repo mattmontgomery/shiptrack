@@ -7,3 +7,7 @@ usps:
   app: app-name
   ip: 127.0.0.1
 zip: 90210
+annotations:
+  "9449011899223998571000":
+    sender: Example sender
+    description: Example description

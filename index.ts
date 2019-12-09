@@ -4,7 +4,12 @@ import * as YAML from "yaml";
 import { parseStringPromise } from "xml2js";
 import * as chalk from "chalk";
 import { Agent } from "https";
-import { toDate, format, formatDistance } from "date-fns";
+import {
+  toDate,
+  format,
+  formatDistanceToNow,
+  differenceInDays
+} from "date-fns";
 import { uniq } from "lodash";
 
 const agent = new Agent({
@@ -18,6 +23,7 @@ class Tracker {
   public zip: string | number;
   public uspsConfig: IUSPSConfig;
   public tracked: ITracked[] = [];
+  public annotations: IAnnotations;
   constructor(trackingConfig: ITrackingConfig) {
     console.log(
       `${chalk.whiteBright(chalk.bold(chalk.bgGray("Shiptrack starting...")))}`
@@ -29,6 +35,7 @@ class Tracker {
       ip: trackingConfig.usps.ip,
       username: trackingConfig.usps.username
     };
+    this.annotations = trackingConfig.annotations;
     this.track();
   }
   async track() {
@@ -74,6 +81,7 @@ class Tracker {
       ? info.ExpectedDeliveryDate.join(", ")
       : "";
     const statusSummary = info.StatusSummary.join(", ");
+    const statusCategory = info.StatusCategory.join(", ");
     const origin =
       info.OriginState && info.OriginCity
         ? `${info.OriginCity.join(", ")}, ${info.OriginState.join(", ")}`
@@ -84,43 +92,60 @@ class Tracker {
       trackingClass,
       expectedDate,
       statusSummary,
-      origin
+      statusCategory,
+      origin,
+      annotation: this.annotations[trackingNumber] || null
     });
   };
-  public logToday = (): void => {
+  private dateIsToday(expectedDate) {
     const dateFormat = "yyyy-MM-dd";
     const today = format(new Date(), dateFormat);
+    return !Number.isNaN(Date.parse(expectedDate))
+      ? format(toDate(Date.parse(expectedDate)), dateFormat) === today
+      : false;
+  }
+  public logToday = (): void => {
     const arrivingToday = this.tracked.filter(t =>
-      !Number.isNaN(Date.parse(t.expectedDate))
-        ? format(toDate(Date.parse(t.expectedDate)), dateFormat) === today
-        : null
+      this.dateIsToday(t.expectedDate)
     );
-    console.log(
-      chalk.bold(
-        `There are ${
-          arrivingToday.length
-        } package(s) arriving today from ${uniq(
-          arrivingToday.map(({ service }) => service)
-        ).join(", ")}`
-      )
-    );
-    console.log("");
+    if (arrivingToday.length) {
+      console.log(
+        chalk.bold(
+          `There are ${
+            arrivingToday.length
+          } package(s) arriving today from ${uniq(
+            arrivingToday.map(({ service }) => service)
+          ).join(", ")}`
+        )
+      );
+      console.log("");
+    }
   };
   public log = (info: ITracked): void => {
+    const expected = info.expectedDate
+      ? this.dateIsToday(info.expectedDate)
+        ? "today"
+        : `${info.expectedDate}`
+      : "Unknown";
     console.log(
-      `${chalk.bold(info.trackingNumber)} [${info.service} | ${
-        info.trackingClass
-      }]: ${chalk.blue(
-        info.expectedDate
-          ? `Expected in ${formatDistance(
-              toDate(Date.parse(info.expectedDate)),
-              new Date()
-            )} (${info.expectedDate})`
-          : "No expected date"
+      `${info.statusCategory.padEnd(15)} | ${chalk.bold(
+        info.trackingNumber.padEnd(25)
+      )} | ${`${info.service}, ${info.trackingClass.replace(
+        /\<.+\>/gi,
+        ""
+      )}`.padEnd(30)} | ${chalk.blue(
+        info.statusCategory === "Delivered" ? "" : `${expected}`
       )}`
     );
     if (info.origin) {
       console.log(`${chalk.green(`Arriving from ${info.origin}`)}`);
+    }
+    if (info.annotation) {
+      console.log(
+        `[${chalk.blackBright(
+          info.annotation.sender || "Unspecified sender"
+        )}] ${chalk.grey(info.annotation.description)}`
+      );
     }
     console.log(`${chalk.dim(info.statusSummary)}\n`);
   };
@@ -138,6 +163,7 @@ interface IUSPSTracking {
   StatusSummary?: string[];
   OriginCity?: string[];
   OriginState?: string[];
+  StatusCategory?: string[];
 }
 interface IUSPSConfig {
   app: string;
@@ -147,6 +173,7 @@ interface IUSPSConfig {
 interface ITrackingConfig {
   zip: number | string;
   usps: ITrackingUSPSConfig;
+  annotations: IAnnotations;
 }
 interface ITrackingUSPSConfig {
   app: string;
@@ -157,9 +184,20 @@ interface ITrackingUSPSConfig {
 
 interface ITracked {
   service: "USPS" | "Fedex" | "DHL" | "UPS";
+  statusCategory: "Delivered" | string;
   trackingNumber: string;
   trackingClass: string;
   expectedDate: string;
   statusSummary: string;
   origin: string;
+  annotation?: IAnnotation;
+}
+
+interface IAnnotations {
+  [key: string]: IAnnotation;
+}
+
+interface IAnnotation {
+  sender?: string;
+  description?: string;
 }
