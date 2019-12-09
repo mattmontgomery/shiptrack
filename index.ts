@@ -12,10 +12,6 @@ import {
 } from "date-fns";
 import { uniq } from "lodash";
 
-const agent = new Agent({
-  rejectUnauthorized: false
-});
-
 const config = readFileSync("./tracking.yml");
 const trackingConfig = YAML.parse(config.toString());
 
@@ -31,6 +27,7 @@ class Tracker {
     console.log("");
     this.zip = trackingConfig.zip;
     this.uspsConfig = {
+      apiBase: trackingConfig.usps.apiBase,
       app: trackingConfig.usps.app,
       ip: trackingConfig.usps.ip,
       username: trackingConfig.usps.username
@@ -43,7 +40,15 @@ class Tracker {
     this.logToday();
     this.tracked.forEach(this.log);
   }
+  private getUspsDeliveryDateField(info: IUSPSTracking): string {
+    return ["PredictedDeliveryDate", "ExpectedDeliveryDate"].find(date =>
+      Array.isArray(info[date]) ? true : null
+    );
+  }
   public trackUsps = async (trackingNumbers = []): Promise<void> => {
+    const agent = new Agent({
+      rejectUnauthorized: false
+    });
     const xml = `<?xml version="1.0" encoding="UTF-8" ?>
         <TrackFieldRequest USERID="${this.uspsConfig.username}">
         <Revision>1</Revision>
@@ -56,19 +61,20 @@ class Tracker {
           )
           .join(`\n`)}
         </TrackFieldRequest>`;
-    const uri = `https://secure.shippingapis.com/ShippingAPI.dll?API=TrackV2&XML=${xml}`;
-    const resp = await nodeFetch(uri, { agent });
+    // console.log(this.uspsConfig);
+    const uri = `${this.uspsConfig.apiBase}?API=TrackV2&XML=${xml}`;
+    const resp = await nodeFetch(uri, {});
     const text = await resp.text();
 
     const result = await parseStringPromise(text);
     // console.log(JSON.stringify(result, null, 2));
     if (result.TrackResponse && Array.isArray(result.TrackResponse.TrackInfo)) {
       result.TrackResponse.TrackInfo.sort((a, b) => {
-        const date_a = a.ExpectedDeliveryDate
-          ? Date.parse(a.ExpectedDeliveryDate)
+        const date_a = a[this.getUspsDeliveryDateField(a)]
+          ? Date.parse(a[this.getUspsDeliveryDateField(a)])
           : Number.POSITIVE_INFINITY;
-        const date_b = b.ExpectedDeliveryDate
-          ? Date.parse(b.ExpectedDeliveryDate)
+        const date_b = b[this.getUspsDeliveryDateField(b)]
+          ? Date.parse(b[this.getUspsDeliveryDateField(b)])
           : Number.POSITIVE_INFINITY;
         return date_a > date_b ? 1 : date_a === date_b ? 0 : -1;
       }).forEach(this.commitUsps);
@@ -79,6 +85,9 @@ class Tracker {
     const trackingClass = info.Class.join(", ");
     const expectedDate = info.ExpectedDeliveryDate
       ? info.ExpectedDeliveryDate.join(", ")
+      : "";
+    const predictedDate = info.PredictedDeliveryDate
+      ? info.PredictedDeliveryDate.join(", ")
       : "";
     const statusSummary = info.StatusSummary.join(", ");
     const statusCategory = info.StatusCategory.join(", ");
@@ -91,6 +100,7 @@ class Tracker {
       trackingNumber,
       trackingClass,
       expectedDate,
+      predictedDate,
       statusSummary,
       statusCategory,
       origin,
@@ -122,29 +132,43 @@ class Tracker {
     }
   };
   public log = (info: ITracked): void => {
+    const LOG_LEFT_SIZE = 20;
+    const LOG_MID_SIZE = 30;
     const expected = info.expectedDate
       ? this.dateIsToday(info.expectedDate)
-        ? "today"
-        : `${info.expectedDate}`
-      : "Unknown";
+        ? "Expected today"
+        : `Expected ${info.expectedDate}`
+      : "";
+    const predicted = info.predictedDate
+      ? this.dateIsToday(info.predictedDate)
+        ? "Predicted today"
+        : `Predicted ${info.predictedDate}`
+      : "";
     console.log(
-      `${info.statusCategory.padEnd(15)} | ${chalk.bold(
-        info.trackingNumber.padEnd(25)
-      )} | ${`${info.service}, ${info.trackingClass.replace(
+      `${info.statusCategory.padEnd(LOG_LEFT_SIZE)} ${chalk.bold(
+        info.trackingNumber.padEnd(LOG_MID_SIZE)
+      )} ${`${info.service}, ${info.trackingClass.replace(
         /\<.+\>/gi,
         ""
-      )}`.padEnd(30)} | ${chalk.blue(
-        info.statusCategory === "Delivered" ? "" : `${expected}`
+      )}`.padEnd(30)} ${chalk.blue(
+        info.statusCategory === "Delivered"
+          ? ""
+          : `${predicted ? predicted : expected}`
       )}`
     );
     if (info.origin) {
-      console.log(`${chalk.green(`Arriving from ${info.origin}`)}`);
-    }
-    if (info.annotation) {
       console.log(
-        `[${chalk.blackBright(
-          info.annotation.sender || "Unspecified sender"
-        )}] ${chalk.grey(info.annotation.description)}`
+        `${chalk.green(`${info.origin}`.padEnd(LOG_LEFT_SIZE))} ${
+          info.annotation
+            ? `${chalk.blackBright(
+                info.annotation.sender || "Unspecified sender"
+              )} ${
+                info.annotation.description
+                  ? `- ${chalk.grey(info.annotation.description || "")}`
+                  : ""
+              }`
+            : ""
+        }`
       );
     }
     console.log(`${chalk.dim(info.statusSummary)}\n`);
@@ -160,12 +184,14 @@ interface IUSPSTracking {
   };
   Class?: string[];
   ExpectedDeliveryDate?: string[];
+  PredictedDeliveryDate?: string[];
   StatusSummary?: string[];
   OriginCity?: string[];
   OriginState?: string[];
   StatusCategory?: string[];
 }
 interface IUSPSConfig {
+  apiBase: string;
   app: string;
   ip: string;
   username: string;
@@ -176,6 +202,7 @@ interface ITrackingConfig {
   annotations: IAnnotations;
 }
 interface ITrackingUSPSConfig {
+  apiBase: string;
   app: string;
   ip: string;
   username: string;
@@ -188,6 +215,7 @@ interface ITracked {
   trackingNumber: string;
   trackingClass: string;
   expectedDate: string;
+  predictedDate: string;
   statusSummary: string;
   origin: string;
   annotation?: IAnnotation;

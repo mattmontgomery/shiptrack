@@ -3,7 +3,7 @@ usps:
     - "9449011899223998571000"
   username: EXAMPLEUSERNAME
   password: EXAMPLEPASSWORD
-  api: https://secure.shippingapis.com/ShippingAPI.dll
+  apiBase: https://secure.shippingapis.com/ShippingAPI.dll
   app: app-name
   ip: 127.0.0.1
 zip: 90210
